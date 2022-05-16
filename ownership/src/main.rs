@@ -289,6 +289,156 @@ fn dangle() -> String {
 1.在任意给定时间，要么只能有一个可变引用，要么只能有多个不可变引用。
 2.引用必须总是有效的。
 
+
+
+Slice 类型
+
+
+slice 允许你引用集合中一段连续的元素序列，而不用引用整个集合。slice是一类引用，所以他没有所有权。
+
+编程习题： 编写一个函数，该函数接收一个字符串，并返回在该字符串中找到的第一个单词。如果函数在该字符串中并未找到空格，则整个字符串就是一个单词，所以应该返回整个字符串。
+view first_word(...)
+
+first_word函数有一个参数&String。因为我们不需要所有权，所以这没问题。不过应该返回什么呢？我们并没有一个真正获取部分字符串的办法。不过，我们可以返回单词结尾的索引，结尾由一个空格表示。
+
+因为需要逐个进行元素的检查String中的值是否为空格，需要用as_bytes方法将String转化为字节数组： let bytes = s.as_bytes();
+接下来，使用iter方法在字节数组上创建一个迭代器：
+for (i, &item) in bytes.iter().enumerate() {
+    //...
+}
+
+iter方法返回集合中的每一个元素，而enumerate包装了iter的结果，将这些元素作为元组的一部分来返回。enumerate返回的元组中，第一个元素是索引，第二个元素是集合中元素的引用。这比我们自己计算索引要方便一些。
+因为enumerate方法返回一个元组，我们可以使用模式...(i, &item)..来解构。所以在for循环中，我们指定了一个模式，其中元组中的i是索引而元组中&item是单个字节。因为我们从.iter().enumerate()中获取了集合元素的引用，所以模式中使用了&。
+
+在for循环中，我们通过字节的字面值语法来寻找空格的字节。如果找到了一个空格，返回它的位置。否则，使用s.len()返回字符串的长度：
+if item == b' ' {
+    return i;
+}
+s.len()
+现在有了一个找到字符串中第一个单词结尾索引的方法，不过这有一个问题。我们返回了一个独立的usize，不过它只在&String的上下文中是一个有意义的数字。换句话说，因为它是一个与String相分离的值，无法保证将来它依然有效。
+例如：
+fn main() {
+    let mut s = String::from("hello world!");
+    let word = first_word(&s);//word 的值为5
+    s.clear();
+    //word在此处的值仍然是5，
+    //但是没有更多的字符串让我们可以有效地应用数值5.word的值现在完全无效！
+}
+这个程序编译时没有任何问题，而且在调用s.clear()之后使用word也不会出错。因为word与s状态完全没有联系，所以word仍然包含值5。可以尝试用值5来提取s的第一个单词，不过这是有bug的，因为在我们将5保存到word之后s的内容已经改变。
+我们不得不时刻担心word的索引与s中的数据不再同步，这很啰嗦且易出错！如果编写这么一个second_word函数的话，管理索引这件事将更加容易出问题，它的签名看起来像这样：
+fn second_word(s: &String) -> (usize, usize) {
+    //...
+}
+现在我们要跟踪一个开始索引和一个结尾索引，同时有了更多从数据的某个特定状态计算而来的值，但都完全没有与这个状态相关联。现在有3个飘忽不定的不相关变量需要保持同步。
+幸运的是，rust为这个问题提供了一个解决方法：字符串Slice。
+
+
+字符串slice
+是String中一部分值的引用，它看起来像这样：
+let s = String::from("hello world");
+let hello = &s[0..5];
+let world = &s[6..11];
+不同于整个String的引用，hello是一个部分String的引用，由一个额外的[0..5]部分指定。可以使用一个由中括号中的[starting_index, ending_index]指定range创建一个slice，其中starting_index是slice的第一个位置，ending_index则是slice最后一个位置的后一个值。
+在其内部，slice的数据结构存储了slice的开始位置和长度，长度对应于ending_index减去starting_index的值。所以对于let world=&s[6..11];的情况，world将是一个包含指向s索引6的指针和长度值5的slice。
+
+
+对于rust的..range语法，如果想要从索引0开始，可以不写两个点号之前的值。换句话说下面两个语句是相同的：
+let s = String::from("hello");
+
+let slice = &s[0..2];
+let slice = &s[..2];
+
+以此类推，如果slice包含String的最后一个字节，也可以舍弃尾部的数字，这意味着如下也是相同的：
+let s = String::from("hello");
+let len = s.len();
+
+let slice = &s[3..len];
+let slice = &s[3..];
+
+也可以同时舍弃这两个值来获取整个字符串的slice。所以如下亦是相同的：
+let s = String::from("hello");
+let len = s.len();
+
+let slice = &s[0..len];
+let slice = &s[..];
+注意：字符串slice range的索引必须位于有效的UTF-8字符边界内，如果尝试从一个多字节字符的中间位置创建字符串slice，则程序将会因错误而退出。出于介绍字符串slice的目的，本部分假设只使用ASCII字符集；
+
+在记住所有这些知识后，让我们重写first_word来返回一个slice。字符串slice的类型生命写作&str。
+fn first_word(s: &String) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &item) in bytes.iter().enumerate() {
+        if item == b' ' {
+            return &s[0..i];
+        }
+    }
+    &s[..]
+}
+现在当调用first_word时，会返回与底层数组关联的单个值。这个值由一个slice开始位置的引用和slice中元素的数量组成。
+现在我们有了一个不易混淆且直观的API了，因为编译器会确保指向String的引用持续有效。还记得之前程序中，当我们获取第一个单词结尾的索引后，接着清除字符串导致索引无效的bug吗？那些代码在逻辑上是不正确的，但却没有显示任何直接的错误。问题会在之后尝试对空字符串使用第一个单词的引用时出现。slice就不可能出现这种bug并让我们更早的知道出问题了。使用slice版本的first_word会抛出一个编译时错误：
+fn main() {
+    let mut s = String::from("hello world");
+    let world = first_word(&s);
+    s.clear();//错误！
+    println!("the first word is: {}", word);
+}
+会发生编译错误，cannoy borrow 's' as mutable because it is also borrowed as immutable
+回忆一下借用规则，当拥有某值的不可变引用时，就不能再获取一个可变引用。因为clear需要清空String，它尝试获取一个可变引用。在调用clear之后的println!使用了word中的引用，所以这个不可变引用在此时必须仍然有效。rust不允许clear中的可变引用和word中的不可变引用同时存在，因此编译失败。rust不仅使得我们的API简单易用，也在编译时就消除了一整类的错误！
+
+
+字符串字面值就是slice
+字符串字面值被储存在二进制文件中？现在知道slice了，我们就可以正确的理解字符串字面量了：
+let s = "hello, world!";
+这里s的类型是&str: 它是一个指向二进制程序特定位置的slice。这也就是为什么字符串字面量是不可变的；&str是一个不可变的引用。
+
+字符串slice作为参数
+在知道了能够获取字面值和String的slice后，我们对first_word做了改进，这是它的签名：
+fm first_word(s: &String) -> &str {
+    //...
+}
+
+而更有经验的rustacean会编写出以下的签名，因为它使得可以对String值和&str值使用相同的函数：
+fn first_word(s: &str) -> &str {
+    //...
+}
+
+如果有一个字符串slice，可以直接传递它。如果有一个String，则可以传递整个String的slice或对String的引用。这种灵活性利用了deref coercions的优势，这个特性在“函数和方法的隐式Deref强制转换”章节中介绍。定义一个获取字符串slice而不是String引用的函数使得我们的API更加通用并且不会丢失任何功能：
+定义一个获取字符串slice而不是String引用的函数使得我们的API更加通用并且不会丢失任何功能：
+fn main() {
+    let my_string = String::from("hello world");
+    //first_word 适用于 String(的slice)，整体或全部
+    let word = first_word(&my_string[0..6]);
+    let word = first_word(&my_string[..]);
+    // first_word 也适用于String的引用
+    // 这等价于整个String的slice
+    let word = first_word(&my_string);
+
+    let my_string_literal = "hello world";
+    //first_word 适用于字符串字面值，整体或全部
+    let word = first_word(&my_string_literal[0..6]);
+    let word = first_word(&my_string_literal[..]);
+
+    //因为字符串字面量已经是字符串slice了，
+    //这也是适合的，无需slice语法！
+    let word = first_word(my_string_literal);
+}
+
+
+
+其他类型的slice
+还有更加通用的slice类型。
+let a = [1,2,3,4,5];
+let slice = &a[1..3];
+assert_eq!(slice, &[2,3]);
+
+这个slice的类型是&[i32]。它跟字符串slice的工作方式一样，通过存储第一个集合元素的引用和一个集合总长度。你可以对其他所有集合使用这类sluce。讲到vector时会详细讨论这些集合。
+
+
+
+总结
+
+所有权、借用和slice这些概念让rust程序在编译时确保内存安全。rust语言提供了跟其他系统编程语言相同的方式来控制你使用的内存，但拥有数据所有者在离开作用域后自动清除其数据的功能意味着你无须额外编写和调试相关的控制代码。
+所有权系统影响了rust中很多其他部分的工作方式，所以我们还会继续讲到这些概念，这将观察本书的余下内容。让我们开始第5章，来看看如何将多份数据组成进一个struct中。
+
 */
 fn main() {
     println!("Hello, world!");
@@ -308,6 +458,11 @@ fn main() {
 
     let r3 = &mut s;//没问题
     println!("{}", r3);
+
+    let mut s = String::from("hello world");
+    let world = first_word_2(&s);
+    s.clear();//错误！
+    println!("the first word is: {}", word);
 }
 
 fn takes_ownership(some_string: String) {//some_string进入作用域
@@ -318,3 +473,23 @@ fn takes_ownership(some_string: String) {//some_string进入作用域
 fn makes_copy(some_integer: i32) {//some_integer 进入作用域
     println!("{}",some_integer)
 }//这里,some_integer 移出作用域，没有特殊之处
+
+//返回单词结尾的字节索引
+fn first_word(s: &String) -> usize {
+    let bytes = s.as_bytes();
+    for (i, &item) in bytes.iter().enumerate() {
+        if item == b' ' {
+            return i;
+        }
+    }
+    s.len()
+}
+fn first_word_2(s: &String) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &item) in bytes.iter().enumerate() {
+        if item == b' ' {
+            return &s[0..i];
+        }
+    }
+    &s[..]
+}
